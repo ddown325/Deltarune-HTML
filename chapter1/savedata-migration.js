@@ -232,13 +232,20 @@
                 fileData = JSON.stringify(fileData);
             }
             
-            // Convert string to Uint8Array
+            // Convert string to Uint8Array for file contents
             const encoder = new TextEncoder();
-            const uint8Array = encoder.encode(fileData);
+            const contentsArray = encoder.encode(fileData);
             
-            console.log(`File size:`, uint8Array.length, 'bytes');
+            console.log(`File size:`, contentsArray.length, 'bytes');
             
-            const putRequest = objectStore.put(uint8Array, filePath);
+            // Create file object with proper Emscripten filesystem structure
+            const fileObject = {
+                timestamp: Date.now(),  // Current timestamp for migration
+                mode: 33188,           // Regular file mode (0100644 in octal)
+                contents: contentsArray
+            };
+            
+            const putRequest = objectStore.put(fileObject, filePath);
             
             putRequest.onsuccess = () => {
                 console.log(`Successfully migrated save file: ${filePath}`);
