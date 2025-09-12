@@ -1,6 +1,6 @@
 /**
- * Save Data Migration Utility
- * Handles migration from localStorage to IndexedDB for Deltarune save data
+ * Save Data Synchronization Utility
+ * Handles bidirectional synchronization between localStorage and IndexedDB for Deltarune save data
  */
 
 (function() {
@@ -12,16 +12,16 @@
     const OBJECT_STORE_NAME = 'FILES';
 
     /**
-     * Check if IndexedDB has save data
+     * Get save data from IndexedDB
      */
-    async function hasIndexedDBSaveData() {
+    async function getIndexedDBSaveData() {
         return new Promise((resolve, reject) => {
             try {
                 const request = indexedDB.open(INDEXEDDB_NAME);
                 
                 request.onerror = () => {
                     console.log('IndexedDB not available or error opening database');
-                    resolve(false);
+                    resolve({});
                 };
                 
                 request.onsuccess = (event) => {
@@ -31,52 +31,62 @@
                         // Check if the object store exists
                         if (!db.objectStoreNames.contains(OBJECT_STORE_NAME)) {
                             db.close();
-                            resolve(false);
+                            resolve({});
                             return;
                         }
                         
                         const transaction = db.transaction([OBJECT_STORE_NAME], 'readonly');
                         const objectStore = transaction.objectStore(OBJECT_STORE_NAME);
                         
-                        // Check for files that start with the save data path
-                        const files = [];
+                        // Get all files that start with the save data path
+                        const saveData = {};
                         const request = objectStore.openCursor();
                         
                         request.onsuccess = (event) => {
                             const cursor = event.target.result;
                             if (cursor) {
                                 if (cursor.key.startsWith(SAVE_DATA_PATH)) {
-                                    files.push(cursor.key);
+                                    const fileName = cursor.key.replace(SAVE_DATA_PATH + '/', '');
+                                    const fileData = cursor.value;
+                                    
+                                    // Extract content from Emscripten filesystem structure
+                                    if (fileData && fileData.contents) {
+                                        const decoder = new TextDecoder();
+                                        const textContent = decoder.decode(fileData.contents);
+                                        saveData[fileName] = {
+                                            content: textContent,
+                                            timestamp: fileData.timestamp || 0
+                                        };
+                                    }
                                 }
                                 cursor.continue();
                             } else {
                                 // No more entries
                                 db.close();
-                                const hasSaveData = files.length > 0;
-                                console.log(`IndexedDB save data check: found ${files.length} files`);
-                                resolve(hasSaveData);
+                                console.log(`IndexedDB save data: found ${Object.keys(saveData).length} files`);
+                                resolve(saveData);
                             }
                         };
                         
                         request.onerror = () => {
                             db.close();
-                            resolve(false);
+                            resolve({});
                         };
                     } catch (error) {
                         db.close();
-                        console.log('Error checking IndexedDB contents:', error);
-                        resolve(false);
+                        console.log('Error reading IndexedDB contents:', error);
+                        resolve({});
                     }
                 };
                 
                 request.onupgradeneeded = () => {
-                    // Database doesn't exist or needs upgrade
-                    console.log('IndexedDB needs upgrade, no save data exists');
-                    resolve(false);
+                    // Database doesn't exist
+                    console.log('IndexedDB does not exist');
+                    resolve({});
                 };
             } catch (error) {
-                console.log('Error checking IndexedDB:', error);
-                resolve(false);
+                console.log('Error accessing IndexedDB:', error);
+                resolve({});
             }
         });
     }
@@ -94,12 +104,21 @@
                     const saveDataKey = key.replace(LOCALSTORAGE_PREFIX, '');
                     const value = localStorage.getItem(key);
                     if (value) {
+                        let content = value;
                         try {
                             // Try to parse as JSON first, fallback to raw string
-                            saveData[saveDataKey] = JSON.parse(value);
+                            const parsed = JSON.parse(value);
+                            content = parsed;
                         } catch (e) {
-                            saveData[saveDataKey] = value;
+                            // Keep as string
                         }
+                        
+                        // Store with metadata including timestamp
+                        const timestamp = Date.now(); // For localStorage, we'll use current time as we don't have stored timestamps
+                        saveData[saveDataKey] = {
+                            content: content,
+                            timestamp: timestamp
+                        };
                     }
                 }
             }
@@ -111,9 +130,30 @@
     }
 
     /**
-     * Migrate save data from localStorage to IndexedDB
+     * Save data to localStorage
      */
-    async function migrateSaveDataToIndexedDB(saveData) {
+    function saveToLocalStorage(fileName, content) {
+        try {
+            const key = LOCALSTORAGE_PREFIX + fileName;
+            let valueToStore = content;
+            
+            if (typeof content === 'object') {
+                valueToStore = JSON.stringify(content);
+            }
+            
+            localStorage.setItem(key, valueToStore);
+            console.log(`Saved to localStorage: ${fileName}`);
+            return true;
+        } catch (error) {
+            console.log(`Error saving to localStorage: ${fileName}`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Save data to IndexedDB
+     */
+    async function saveToIndexedDB(fileName, content) {
         return new Promise((resolve, reject) => {
             try {
                 // First check if database exists and what version it is
@@ -130,26 +170,22 @@
                     const hasObjectStore = testDb.objectStoreNames.contains(OBJECT_STORE_NAME);
                     testDb.close();
                     
-                    console.log(`IndexedDB current version: ${currentVersion}, has object store: ${hasObjectStore}`);
-                    
                     let targetVersion = currentVersion;
                     if (!hasObjectStore) {
                         targetVersion = Math.max(currentVersion + 1, 1);
-                        console.log(`Need to create object store, upgrading to version ${targetVersion}`);
                     }
                     
                     // Now open with the appropriate version
                     const request = indexedDB.open(INDEXEDDB_NAME, targetVersion);
                     
                     request.onerror = () => {
-                        console.log('Error opening IndexedDB for migration');
+                        console.log('Error opening IndexedDB for saving');
                         resolve(false);
                     };
                     
-                    let migrationPerformed = false;
+                    let savePerformed = false;
                     
                     request.onupgradeneeded = (event) => {
-                        console.log('IndexedDB onupgradeneeded event fired - creating object store');
                         const db = event.target.result;
                         
                         // Create object store if it doesn't exist
@@ -158,43 +194,40 @@
                             console.log('Created object store:', OBJECT_STORE_NAME);
                         }
                         
-                        // Perform migration within the upgrade transaction
-                        performMigration(event.target.transaction, saveData);
-                        migrationPerformed = true;
+                        // Perform save within the upgrade transaction
+                        performIndexedDBSave(event.target.transaction, fileName, content);
+                        savePerformed = true;
                     };
                     
                     request.onsuccess = (event) => {
-                        console.log('IndexedDB onsuccess event fired');
                         const db = event.target.result;
                         
-                        if (!migrationPerformed) {
-                            console.log('Migration was not performed in upgrade, checking if we can do it now');
-                            // Database exists but migration didn't happen in upgrade - do it now
+                        if (!savePerformed) {
+                            // Database exists but save didn't happen in upgrade - do it now
                             if (!db.objectStoreNames.contains(OBJECT_STORE_NAME)) {
-                                console.log('Object store does not exist, cannot migrate without upgrade');
+                                console.log('Object store does not exist, cannot save without upgrade');
                                 db.close();
                                 resolve(false);
                                 return;
                             }
                             
-                            console.log('Performing migration in regular transaction');
                             const transaction = db.transaction([OBJECT_STORE_NAME], 'readwrite');
                             
-                            performMigration(transaction, saveData);
+                            performIndexedDBSave(transaction, fileName, content);
                             
                             transaction.oncomplete = () => {
-                                console.log('Migration transaction completed successfully');
+                                console.log(`Successfully saved to IndexedDB: ${fileName}`);
                                 db.close();
                                 resolve(true);
                             };
                             
                             transaction.onerror = (errorEvent) => {
-                                console.log('Migration transaction error:', errorEvent.target.error);
+                                console.log(`Error saving to IndexedDB: ${fileName}`, errorEvent.target.error);
                                 db.close();
                                 resolve(false);
                             };
                         } else {
-                            console.log('Migration was performed in upgrade transaction');
+                            console.log(`Successfully saved to IndexedDB during upgrade: ${fileName}`);
                             db.close();
                             resolve(true);
                         }
@@ -206,116 +239,110 @@
                     console.log('Unexpected upgrade needed during version check');
                 };
             } catch (error) {
-                console.log('Error during save data migration:', error);
+                console.log('Error during IndexedDB save:', error);
                 resolve(false);
             }
         });
     }
 
     /**
-     * Perform the actual migration within a transaction
+     * Perform the actual IndexedDB save within a transaction
      */
-    function performMigration(transaction, saveData) {
+    function performIndexedDBSave(transaction, fileName, content) {
         const objectStore = transaction.objectStore(OBJECT_STORE_NAME);
+        const filePath = `${SAVE_DATA_PATH}/${fileName}`;
         
-        console.log('Starting migration of', Object.keys(saveData).length, 'files');
-        
-        // Convert save data to files in the _savedata directory
-        Object.keys(saveData).forEach((key) => {
-            const filePath = `${SAVE_DATA_PATH}/${key}`;
-            let fileData = saveData[key];
-            
-            console.log(`Migrating file: ${key} -> ${filePath}`);
-            
-            // Convert data to appropriate format for storage
-            if (typeof fileData === 'object') {
-                fileData = JSON.stringify(fileData);
-            }
-            
-            // Convert string to Uint8Array for file contents
-            const encoder = new TextEncoder();
-            const contentsArray = encoder.encode(fileData);
-            
-            console.log(`File size:`, contentsArray.length, 'bytes');
-            
-            // Create file object with proper Emscripten filesystem structure
-            const fileObject = {
-                timestamp: Date.now(),  // Current timestamp for migration
-                mode: 33188,           // Regular file mode (0100644 in octal)
-                contents: contentsArray
-            };
-            
-            const putRequest = objectStore.put(fileObject, filePath);
-            
-            putRequest.onsuccess = () => {
-                console.log(`Successfully migrated save file: ${filePath}`);
-            };
-            
-            putRequest.onerror = (errorEvent) => {
-                console.log(`Error migrating save file: ${filePath}`, errorEvent.target.error);
-            };
-        });
-        
-        if (Object.keys(saveData).length === 0) {
-            console.log('No save data to migrate');
+        // Convert content to appropriate format for storage
+        let fileData = content;
+        if (typeof fileData === 'object') {
+            fileData = JSON.stringify(fileData);
         }
         
-        transaction.oncomplete = () => {
-            console.log('Migration transaction completed successfully');
+        // Convert string to Uint8Array for file contents
+        const encoder = new TextEncoder();
+        const contentsArray = encoder.encode(fileData);
+        
+        // Create file object with proper Emscripten filesystem structure
+        const fileObject = {
+            timestamp: Date.now(),  // Current timestamp
+            mode: 33188,           // Regular file mode (0100644 in octal)
+            contents: contentsArray
         };
         
-        transaction.onerror = (errorEvent) => {
-            console.log('Migration transaction error:', errorEvent.target.error);
+        const putRequest = objectStore.put(fileObject, filePath);
+        
+        putRequest.onsuccess = () => {
+            console.log(`File saved to IndexedDB: ${filePath}`);
+        };
+        
+        putRequest.onerror = (errorEvent) => {
+            console.log(`Error saving file to IndexedDB: ${filePath}`, errorEvent.target.error);
         };
     }
-
     /**
-     * Main migration function
+     * Synchronize save data between localStorage and IndexedDB
      */
-    async function checkAndMigrateSaveData() {
+    async function synchronizeSaveData() {
         try {
-            console.log('Checking for save data migration...');
+            console.log('Starting save data synchronization...');
             
-            // Check if IndexedDB already has save data
-            const hasIDBSaveData = await hasIndexedDBSaveData();
+            // Get save data from both storage systems
+            const [localSaveData, indexedDBSaveData] = await Promise.all([
+                Promise.resolve(getLocalStorageSaveData()),
+                getIndexedDBSaveData()
+            ]);
             
-            if (hasIDBSaveData) {
-                console.log('IndexedDB already contains save data, skipping migration');
+            console.log(`Found ${Object.keys(localSaveData).length} files in localStorage`);
+            console.log(`Found ${Object.keys(indexedDBSaveData).length} files in IndexedDB`);
+            
+            // Get all unique file names from both storages
+            const allFileNames = new Set([
+                ...Object.keys(localSaveData),
+                ...Object.keys(indexedDBSaveData)
+            ]);
+            
+            if (allFileNames.size === 0) {
+                console.log('No save data found in either storage system');
                 return;
             }
             
-            console.log('No save data found in IndexedDB, checking localStorage...');
+            console.log(`Synchronizing ${allFileNames.size} unique files...`);
             
-            // Get save data from localStorage
-            const localSaveData = getLocalStorageSaveData();
-            
-            if (Object.keys(localSaveData).length === 0) {
-                console.log('No save data found in localStorage, skipping migration');
-                return;
+            // Synchronize each file
+            for (const fileName of allFileNames) {
+                const localFile = localSaveData[fileName];
+                const indexedDBFile = indexedDBSaveData[fileName];
+                
+                if (localFile && indexedDBFile) {
+                    // File exists in both - compare timestamps or just ensure both are up to date
+                    console.log(`File exists in both storages: ${fileName}`);
+                    // For now, we'll keep both as they are since we can't determine which is newer
+                    // In a real implementation, you might want to compare content or ask user
+                    continue;
+                } else if (localFile && !indexedDBFile) {
+                    // File only in localStorage - copy to IndexedDB
+                    console.log(`Copying from localStorage to IndexedDB: ${fileName}`);
+                    await saveToIndexedDB(fileName, localFile.content);
+                } else if (!localFile && indexedDBFile) {
+                    // File only in IndexedDB - copy to localStorage
+                    console.log(`Copying from IndexedDB to localStorage: ${fileName}`);
+                    saveToLocalStorage(fileName, indexedDBFile.content);
+                }
             }
             
-            console.log(`Found ${Object.keys(localSaveData).length} save file(s) in localStorage, migrating...`);
-            
-            // Migrate save data to IndexedDB
-            const migrationSuccess = await migrateSaveDataToIndexedDB(localSaveData);
-            
-            if (migrationSuccess) {
-                console.log('Save data migration completed successfully');
-            } else {
-                console.log('Save data migration failed');
-            }
+            console.log('Save data synchronization completed');
         } catch (error) {
-            console.log('Error during save data migration check:', error);
+            console.log('Error during save data synchronization:', error);
         }
     }
 
-    // Export the migration function to global scope
-    window.checkAndMigrateSaveData = checkAndMigrateSaveData;
+    // Export the synchronization function to global scope
+    window.synchronizeSaveData = synchronizeSaveData;
 
-    // Auto-run migration check when the script loads
+    // Auto-run synchronization when the script loads
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', checkAndMigrateSaveData);
+        document.addEventListener('DOMContentLoaded', synchronizeSaveData);
     } else {
-        checkAndMigrateSaveData();
+        synchronizeSaveData();
     }
 })();
