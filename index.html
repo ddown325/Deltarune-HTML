@@ -81,7 +81,13 @@
         document.documentElement.querySelectorAll('script').forEach(oldScript => {
           const newScript = document.createElement('script');
           if (oldScript.src) {
-            newScript.src = oldScript.src;
+            // Fix: prepend the chapter path if it's a relative URL
+            const src = oldScript.src;
+            if (!src.startsWith('http') && !src.startsWith('/')) {
+              newScript.src = `chapter${chapter}/${src}`;
+            } else {
+              newScript.src = src;
+            }
           } else {
             newScript.textContent = oldScript.textContent;
           }
