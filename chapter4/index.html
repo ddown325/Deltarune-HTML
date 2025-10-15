@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
-    <link rel="icon" type="x-icon" href="/chapter4/favicon.png">
+    <link rel="icon" type="x-icon" href="favicon.png">
     <title>Deltarune Chapter 4</title>
-    <link rel="stylesheet" href="/chapter4/chapter4.css">
+    <link rel="stylesheet" href="chapter4.css">
   </head>
   <body>
     <canvas
@@ -40,10 +40,9 @@
       </div>
     </div>
       <script type="text/javascript">
-        // Detect the current chapter folder from the page title or use a default
-        const chapterMatch = document.title.match(/Chapter (\d+)/);
-        const chapterNum = chapterMatch ? chapterMatch[1] : '1';
-        const basePath = `chapter${chapterNum}/`;
+  // Previously used basePath to prefix chapter folder. Now assets load relative to the current file.
+  const chapterMatch = document.title.match(/Chapter (\d+)/);
+  const chapterNum = chapterMatch ? chapterMatch[1] : '1';
 
         function mergeFiles(fileParts) {
             return new Promise((resolve, reject) => {
@@ -55,8 +54,8 @@
                         resolve(mergedFileUrl);
                         return;
                     }
-                    // Add basePath to each file part
-                    fetch(basePath + fileParts[index]).then((response) => response.arrayBuffer()).then((data) => {
+                    // Fetch parts relative to the current chapter directory (do not double-prefix)
+                    fetch(fileParts[index]).then((response) => response.arrayBuffer()).then((data) => {
                         buffers.push(data);
                         fetchPart(index + 1);
                     }).catch(reject);
@@ -113,17 +112,17 @@
                 return originalOpen.call(this, method, url, ...rest);
             };
             
-            // Load scripts with correct path
+            // Load scripts relative to this chapter directory
             let index = document.createElement("script");
-            index.src = basePath + "index.js";
+            index.src = "index.js";
             document.body.appendChild(index);
             
             let migration = document.createElement("script");
-            migration.src = basePath + "savesync.js";
+            migration.src = "savesync.js";
             document.body.appendChild(migration);
             
             let runner = document.createElement("script");
-            runner.src = basePath + "runner.js";
+            runner.src = "runner.js";
             document.body.appendChild(runner);
         }).catch(error => {
             console.error("Failed to merge files:", error);
