@@ -1,2 +1,0 @@
-# Deltarune-HTML
-Deltarune-HTML
