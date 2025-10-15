@@ -11,7 +11,7 @@
     // ============================================================================
     
     const CONFIG = {
-        gameId: 'dtch1',
+        gameId: 'dt',
         debug: true,
         
         // IndexedDB settings
@@ -21,7 +21,7 @@
         },
         
         // localStorage prefix for save files
-        localStoragePrefix: 'dtch1_save_',
+        localStoragePrefix: 'dt_save_',
         
         // Sync intervals
         indexedDBSyncInterval: 10000, // 10 seconds
