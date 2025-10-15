@@ -962,13 +962,9 @@
       }
 
       function quitIfSupported() {
-        if (window.oprt && window.oprt.closeTab) { /* GX Mobile API */
-          window.oprt.closeTab();
-        } else if (window.chrome && window.chrome.runtime && window.chrome.runtime.sendMessage) {
-          window.chrome.runtime.sendMessage('mpojjmidmnpcpopbebmecmjdkdbgdeke', { command: 'closeTab' })
-        }
+        window.location.href = "../index.html";
       }
-
+      
       function enterFullscreenIfSupported() {
         if (!window.oprt || !window.oprt.enterFullscreen) { /* GX Mobile API */
           return;
